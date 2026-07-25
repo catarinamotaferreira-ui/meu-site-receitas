@@ -63,6 +63,7 @@ const PAGE_SIZE = 12;
 interface Ingrediente {
   id: string;
   nome: string;
+  ingrediente_base?: string;
   tipo?: string;
   categoria?: string;
   unidade_padrao?: string;
@@ -188,7 +189,7 @@ export default function Home() {
 
   const [selectedCategory, setSelectedCategory] = useState<string>('Todas');
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedIngredientIds, setSelectedIngredientIds] = useState<string[]>([]);
+  const [selectedIngredientBases, setSelectedIngredientBases] = useState<string[]>([]);
   const [ingredientFilterSearch, setIngredientFilterSearch] = useState('');
   const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>({});
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
@@ -245,7 +246,7 @@ export default function Home() {
 
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-  }, [selectedCategory, searchTerm, selectedIngredientIds, showOnlyFavorites]);
+  }, [selectedCategory, searchTerm, selectedIngredientBases, showOnlyFavorites]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -403,9 +404,9 @@ export default function Home() {
     persistCheckedItems({ ...checkedItems, [id]: !checkedItems[id] });
   };
 
-  const toggleIngredientSelection = (id: string) => {
-    setSelectedIngredientIds(prev =>
-      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+  const toggleIngredientBaseSelection = (base: string) => {
+    setSelectedIngredientBases(prev =>
+      prev.includes(base) ? prev.filter(b => b !== base) : [...prev, base]
     );
   };
 
@@ -500,6 +501,8 @@ export default function Home() {
     return acc;
   }, {});
 
+  const getBase = (ing?: Ingrediente) => (ing?.ingrediente_base || ing?.nome || '').trim();
+
   const filteredRecipes = receitas.filter(r => {
     const recipeTags = parseTags(r.categoria);
     const matchesCategory = selectedCategory === 'Todas' || recipeTags.includes(selectedCategory);
@@ -507,15 +510,22 @@ export default function Home() {
     const matchesFavorite = !showOnlyFavorites || favoriteIds.includes(r.id);
 
     if (!matchesCategory || !matchesSearch || !matchesFavorite) return false;
-    if (selectedIngredientIds.length === 0) return true;
+    if (selectedIngredientBases.length === 0) return true;
 
-    const recIngIds = r.receita_ingredientes?.map(ri => ri.ingrediente_id) || [];
-    return selectedIngredientIds.every(ingId => recIngIds.includes(ingId));
+    const recipeBases = (r.receita_ingredientes || []).map(ri => getBase(ri.ingredientes));
+    return selectedIngredientBases.every(base => recipeBases.includes(base));
   });
 
   const visibleRecipes = filteredRecipes.slice(0, visibleCount);
-  const filteredIngredientChips = ingredientes.filter(i =>
-    i.nome.toLowerCase().includes(ingredientFilterSearch.trim().toLowerCase())
+
+  // Agrupa os 220 ingredientes pelo seu "ingrediente base" (ex: "Chicken Breast",
+  // "Cooked Chicken Breast" e "Chicken Broth" ficam todos sob "Chicken"), para que
+  // selecionar uma base encontre receitas com qualquer uma das suas variantes.
+  const uniqueBases = Array.from(new Set(ingredientes.map(i => getBase(i)))).sort((a, b) =>
+    a.localeCompare(b, 'pt', { sensitivity: 'base' })
+  );
+  const filteredIngredientChips = uniqueBases.filter(base =>
+    base.toLowerCase().includes(ingredientFilterSearch.trim().toLowerCase())
   );
 
   const dayTotals = (dia: string) => {
@@ -533,6 +543,15 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-[#FAF1E6] text-[#1A1A2E] pb-12" style={{ fontFamily: "'Inter', 'Helvetica Neue', sans-serif" }}>
       <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+      <style jsx global>{`
+        @media print {
+          body * { visibility: hidden; }
+          .print-area, .print-area * { visibility: visible; }
+          .print-area { position: absolute; left: 0; top: 0; width: 100%; border: none !important; box-shadow: none !important; }
+          .no-print { display: none !important; }
+          .print-title { display: block !important; }
+        }
+      `}</style>
 
       {/* Header */}
       <header className="border-b border-[#E8DCC8] bg-[#FAF1E6]/90 backdrop-blur sticky top-0 z-10">
@@ -652,12 +671,12 @@ export default function Home() {
                       <p className="text-xs text-[#8A8066] mt-0.5">Pode selecionar um ou vários ingredientes para encontrar receitas correspondentes.</p>
                     </div>
 
-                    {selectedIngredientIds.length > 0 && (
+                    {selectedIngredientBases.length > 0 && (
                       <button
-                        onClick={() => setSelectedIngredientIds([])}
+                        onClick={() => setSelectedIngredientBases([])}
                         className="text-xs text-[#232A6B] hover:underline"
                       >
-                        Limpar seleção ({selectedIngredientIds.length})
+                        Limpar seleção ({selectedIngredientBases.length})
                       </button>
                     )}
                   </div>
@@ -671,12 +690,12 @@ export default function Home() {
                   />
 
                   <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto p-2 bg-[#FAF1E6] rounded-lg border border-[#E8DCC8]">
-                    {filteredIngredientChips.map(ing => {
-                      const isSelected = selectedIngredientIds.includes(ing.id);
+                    {filteredIngredientChips.map(base => {
+                      const isSelected = selectedIngredientBases.includes(base);
                       return (
                         <button
-                          key={ing.id}
-                          onClick={() => toggleIngredientSelection(ing.id)}
+                          key={base}
+                          onClick={() => toggleIngredientBaseSelection(base)}
                           className={`px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1.5 ${
                             isSelected
                               ? 'bg-[#232A6B] text-[#FAF1E6] border border-[#232A6B]'
@@ -684,7 +703,7 @@ export default function Home() {
                           }`}
                         >
                           <span>{isSelected ? '✓' : '+'}</span>
-                          <span>{ing.nome}</span>
+                          <span>{base}</span>
                         </button>
                       );
                     })}
@@ -749,7 +768,7 @@ export default function Home() {
                             ))}
                           </div>
                           <h3
-                            className="font-semibold text-lg text-[#1A1A2E] group-hover:text-[#232A6B] transition-colors line-clamp-1 mb-2"
+                            className="font-semibold text-lg text-[#1A1A2E] group-hover:text-[#232A6B] transition-colors mb-2"
                             style={{ fontFamily: "'Fraunces', serif" }}
                           >
                             {receita.nome}
@@ -862,9 +881,20 @@ export default function Home() {
             {/* TAB 3: LISTA DE COMPRAS AGRUPADA */}
             {activeTab === 'compras' && (
               <div className="max-w-2xl mx-auto space-y-6">
-                <div className="bg-white border border-[#E8DCC8] rounded-xl p-6">
-                  <h2 className="text-xl font-semibold text-[#1A1A2E] mb-2" style={{ fontFamily: "'Fraunces', serif" }}>Lista de Compras</h2>
-                  <p className="text-xs text-[#8A8066] mb-6">
+                <div className="bg-white border border-[#E8DCC8] rounded-xl p-6 print-area">
+                  <div className="flex items-center justify-between mb-2 no-print">
+                    <h2 className="text-xl font-semibold text-[#1A1A2E]" style={{ fontFamily: "'Fraunces', serif" }}>Lista de Compras</h2>
+                    {shoppingList.length > 0 && (
+                      <button
+                        onClick={() => window.print()}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[#FAF1E6] border border-[#E8DCC8] text-[#232A6B] hover:border-[#232A6B]/50 transition"
+                      >
+                        🖨 Imprimir
+                      </button>
+                    )}
+                  </div>
+                  <h2 className="hidden print-title text-xl font-semibold text-[#1A1A2E] mb-2" style={{ fontFamily: "'Fraunces', serif" }}>Lista de Compras</h2>
+                  <p className="text-xs text-[#8A8066] mb-6 no-print">
                     Organizada por categoria de ingrediente. As marcações ficam guardadas neste dispositivo.
                   </p>
 
@@ -896,7 +926,7 @@ export default function Home() {
                                     type="checkbox"
                                     checked={!!checkedItems[item.id]}
                                     onChange={() => {}}
-                                    className="rounded border-[#E8DCC8] bg-white text-[#232A6B] focus:ring-[#232A6B] h-4 w-4"
+                                    className="rounded border-[#E8DCC8] bg-white text-[#232A6B] focus:ring-[#232A6B] h-4 w-4 no-print"
                                   />
                                   <span className="font-medium text-sm">{item.nome}</span>
                                 </div>
