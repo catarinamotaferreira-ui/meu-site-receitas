@@ -199,6 +199,18 @@ export default function Home() {
   const [selectedReceitaDetails, setSelectedReceitaDetails] = useState<Receita | null>(null);
 
   const [showRecipeModal, setShowRecipeModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [editReceita, setEditReceita] = useState({
+    id: '',
+    nome: '',
+    descricao: '',
+    instrucoes: '',
+    imagem_url: '',
+    tempo_preparacao_min: 30,
+    tags: [] as string[],
+    ingredientes: [{ ingrediente_id: '', buscaIngrediente: '', quantidade: 1, unidade: 'g' }]
+  });
   const [showPlanModal, setShowPlanModal] = useState(false);
   const [modalDia, setModalDia] = useState('Segunda');
   const [modalRefeicao, setModalRefeicao] = useState('Almoço');
@@ -364,6 +376,99 @@ export default function Home() {
 
     } catch (err: any) {
       alert(`Erro ao guardar receita: ${err.message || err}`);
+    }
+  };
+
+  const handleImageUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    onUploaded: (url: string) => void
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingImage(true);
+    try {
+      const ext = file.name.split('.').pop();
+      const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const { error: uploadErr } = await supabase.storage.from('recipe-images').upload(fileName, file);
+      if (uploadErr) throw uploadErr;
+      const { data } = supabase.storage.from('recipe-images').getPublicUrl(fileName);
+      onUploaded(data.publicUrl);
+    } catch (err: any) {
+      alert(`Erro ao enviar imagem: ${err.message || err}. Verifica se criaste o bucket "recipe-images" no Supabase Storage.`);
+    } finally {
+      setUploadingImage(false);
+      e.target.value = '';
+    }
+  };
+
+  const openEditModal = (receita: Receita) => {
+    setEditReceita({
+      id: receita.id,
+      nome: receita.nome,
+      descricao: receita.descricao || '',
+      instrucoes: receita.instrucoes || '',
+      imagem_url: receita.imagem_url || '',
+      tempo_preparacao_min: receita.tempo_preparacao_min || 30,
+      tags: parseTags(receita.categoria),
+      ingredientes: (receita.receita_ingredientes || []).map(ri => ({
+        ingrediente_id: ri.ingrediente_id,
+        buscaIngrediente: ri.ingredientes?.nome || '',
+        quantidade: ri.quantidade,
+        unidade: ri.unidade || 'g'
+      }))
+    });
+    setShowEditModal(true);
+  };
+
+  const toggleEditReceitaTag = (tagValue: string) => {
+    setEditReceita(prev => ({
+      ...prev,
+      tags: prev.tags.includes(tagValue)
+        ? prev.tags.filter(t => t !== tagValue)
+        : [...prev.tags, tagValue]
+    }));
+  };
+
+  const handleUpdateRecipe = async () => {
+    if (!editReceita.nome.trim()) return alert('Insira o nome da receita!');
+
+    try {
+      const { error: updErr } = await supabase
+        .from('receitas')
+        .update({
+          nome: editReceita.nome,
+          descricao: editReceita.descricao,
+          instrucoes: editReceita.instrucoes,
+          imagem_url: editReceita.imagem_url || null,
+          tempo_preparacao_min: Number(editReceita.tempo_preparacao_min),
+          categoria: editReceita.tags.join(', '),
+        })
+        .eq('id', editReceita.id);
+
+      if (updErr) throw updErr;
+
+      // Substitui os ingredientes: remove os antigos e insere os atuais.
+      await supabase.from('receitas_ingredientes').delete().eq('receita_id', editReceita.id);
+
+      const itemsToInsert = editReceita.ingredientes
+        .filter(i => i.ingrediente_id)
+        .map(i => ({
+          receita_id: editReceita.id,
+          ingrediente_id: i.ingrediente_id,
+          quantidade: Number(i.quantidade),
+          unidade: i.unidade
+        }));
+
+      if (itemsToInsert.length > 0) {
+        await supabase.from('receitas_ingredientes').insert(itemsToInsert);
+      }
+
+      setShowEditModal(false);
+      setSelectedReceitaDetails(null);
+      fetchData();
+
+    } catch (err: any) {
+      alert(`Erro ao atualizar receita: ${err.message || err}`);
     }
   };
 
@@ -1143,6 +1248,12 @@ export default function Home() {
                   {favoriteIds.includes(selectedReceitaDetails.id) ? '★' : '☆'}
                 </button>
                 <button
+                  onClick={() => openEditModal(selectedReceitaDetails)}
+                  className="text-xs font-medium px-3 py-1.5 rounded-lg bg-[#232A6B]/10 text-[#232A6B] hover:bg-[#232A6B]/20 transition"
+                >
+                  Editar
+                </button>
+                <button
                   onClick={() => setSelectedReceitaDetails(null)}
                   className="text-[#8A8066] hover:text-[#1A1A2E] text-lg font-bold p-2"
                 >
@@ -1208,14 +1319,29 @@ export default function Home() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-[#8A8066] uppercase tracking-wider mb-1">URL da Imagem (opcional)</label>
-                <input
-                  type="text"
-                  value={novaReceita.imagem_url}
-                  onChange={e => setNovaReceita({ ...novaReceita, imagem_url: e.target.value })}
-                  placeholder="https://..."
-                  className="w-full bg-white border border-[#E8DCC8] rounded-xl p-3 text-sm text-[#1A1A2E] focus:outline-none focus:border-[#232A6B]"
-                />
+                <label className="block text-xs font-semibold text-[#8A8066] uppercase tracking-wider mb-1">Imagem (opcional)</label>
+                <div className="flex gap-2 items-center">
+                  <input
+                    type="text"
+                    value={novaReceita.imagem_url}
+                    onChange={e => setNovaReceita({ ...novaReceita, imagem_url: e.target.value })}
+                    placeholder="https://... ou faz upload"
+                    className="flex-1 bg-white border border-[#E8DCC8] rounded-xl p-3 text-sm text-[#1A1A2E] focus:outline-none focus:border-[#232A6B]"
+                  />
+                  <label className="px-3 py-3 rounded-xl text-xs font-medium bg-white border border-[#E8DCC8] text-[#232A6B] hover:border-[#232A6B]/50 cursor-pointer whitespace-nowrap">
+                    {uploadingImage ? 'A enviar...' : 'Upload'}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      disabled={uploadingImage}
+                      onChange={e => handleImageUpload(e, url => setNovaReceita(prev => ({ ...prev, imagem_url: url })))}
+                    />
+                  </label>
+                </div>
+                {novaReceita.imagem_url && (
+                  <img src={novaReceita.imagem_url} alt="" className="mt-2 h-24 rounded-lg object-cover border border-[#E8DCC8]" />
+                )}
               </div>
 
               <div>
@@ -1355,6 +1481,192 @@ export default function Home() {
                 className="px-5 py-2 bg-[#232A6B] hover:bg-[#2E3789] text-[#FAF1E6] rounded-xl text-sm font-medium transition"
               >
                 Guardar Receita
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL EDITAR RECEITA */}
+      {showEditModal && (
+        <div className="fixed inset-0 bg-[#1A1A2E]/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#FAF1E6] border border-[#E8DCC8] rounded-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 space-y-6 shadow-2xl">
+            <div className="flex justify-between items-center">
+              <h2 className="text-xl font-semibold text-[#1A1A2E]" style={{ fontFamily: "'Fraunces', serif" }}>Editar Receita</h2>
+              <button onClick={() => setShowEditModal(false)} className="text-[#8A8066] hover:text-[#1A1A2E]">✕</button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-[#8A8066] uppercase tracking-wider mb-1">Nome da Receita</label>
+                <input
+                  type="text"
+                  value={editReceita.nome}
+                  onChange={e => setEditReceita({ ...editReceita, nome: e.target.value })}
+                  className="w-full bg-white border border-[#E8DCC8] rounded-xl p-3 text-sm text-[#1A1A2E] focus:outline-none focus:border-[#232A6B]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#8A8066] uppercase tracking-wider mb-1">Imagem</label>
+                <div className="flex gap-2 items-center">
+                  <input
+                    type="text"
+                    value={editReceita.imagem_url}
+                    onChange={e => setEditReceita({ ...editReceita, imagem_url: e.target.value })}
+                    placeholder="https://... ou faz upload"
+                    className="flex-1 bg-white border border-[#E8DCC8] rounded-xl p-3 text-sm text-[#1A1A2E] focus:outline-none focus:border-[#232A6B]"
+                  />
+                  <label className="px-3 py-3 rounded-xl text-xs font-medium bg-white border border-[#E8DCC8] text-[#232A6B] hover:border-[#232A6B]/50 cursor-pointer whitespace-nowrap">
+                    {uploadingImage ? 'A enviar...' : 'Upload'}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      disabled={uploadingImage}
+                      onChange={e => handleImageUpload(e, url => setEditReceita(prev => ({ ...prev, imagem_url: url })))}
+                    />
+                  </label>
+                </div>
+                {editReceita.imagem_url && (
+                  <img src={editReceita.imagem_url} alt="" className="mt-2 h-24 rounded-lg object-cover border border-[#E8DCC8]" />
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#8A8066] uppercase tracking-wider mb-2">Categorias (pode escolher várias)</label>
+                <div className="flex flex-wrap gap-2">
+                  {TAG_OPTIONS.map(tag => {
+                    const isSelected = editReceita.tags.includes(tag.value);
+                    return (
+                      <button
+                        key={tag.value}
+                        type="button"
+                        onClick={() => toggleEditReceitaTag(tag.value)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                          isSelected
+                            ? 'bg-[#232A6B] text-[#FAF1E6] border border-[#232A6B]'
+                            : 'bg-white text-[#5F5A4E] border border-[#E8DCC8] hover:border-[#232A6B]/40'
+                        }`}
+                      >
+                        {tag.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#8A8066] uppercase tracking-wider mb-1">Tempo de Preparação (min)</label>
+                <input
+                  type="number"
+                  value={editReceita.tempo_preparacao_min}
+                  onChange={e => setEditReceita({ ...editReceita, tempo_preparacao_min: Number(e.target.value) })}
+                  className="w-full bg-white border border-[#E8DCC8] rounded-xl p-3 text-sm text-[#1A1A2E] focus:outline-none focus:border-[#232A6B] font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#8A8066] uppercase tracking-wider mb-1">Descrição</label>
+                <textarea
+                  value={editReceita.descricao}
+                  onChange={e => setEditReceita({ ...editReceita, descricao: e.target.value })}
+                  className="w-full bg-white border border-[#E8DCC8] rounded-xl p-3 text-sm text-[#1A1A2E] focus:outline-none focus:border-[#232A6B] h-20 resize-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#8A8066] uppercase tracking-wider mb-1">Instruções</label>
+                <textarea
+                  value={editReceita.instrucoes}
+                  onChange={e => setEditReceita({ ...editReceita, instrucoes: e.target.value })}
+                  className="w-full bg-white border border-[#E8DCC8] rounded-xl p-3 text-sm text-[#1A1A2E] focus:outline-none focus:border-[#232A6B] h-28 resize-none"
+                />
+              </div>
+
+              <div className="space-y-3 pt-2">
+                <label className="block text-xs font-semibold text-[#232A6B] uppercase tracking-wider">Ingredientes</label>
+                {editReceita.ingredientes.map((item, idx) => (
+                  <div key={idx} className="flex gap-2 items-center">
+                    <input
+                      type="text"
+                      list="ingredientes-datalist"
+                      placeholder="Pesquisar ingrediente..."
+                      value={item.buscaIngrediente}
+                      onChange={e => {
+                        const val = e.target.value;
+                        const match = ingredientes.find(i => i.nome.toLowerCase() === val.toLowerCase());
+                        const newIngs = [...editReceita.ingredientes];
+                        newIngs[idx] = { ...newIngs[idx], buscaIngrediente: val, ingrediente_id: match ? match.id : '' };
+                        setEditReceita({ ...editReceita, ingredientes: newIngs });
+                      }}
+                      className={`flex-1 bg-white border rounded-xl p-2.5 text-sm text-[#1A1A2E] focus:outline-none focus:border-[#232A6B] ${
+                        item.buscaIngrediente && !item.ingrediente_id ? 'border-red-300' : 'border-[#E8DCC8]'
+                      }`}
+                    />
+
+                    <input
+                      type="number"
+                      placeholder="Qtd"
+                      value={item.quantidade}
+                      onChange={e => {
+                        const newIngs = [...editReceita.ingredientes];
+                        newIngs[idx].quantidade = Number(e.target.value);
+                        setEditReceita({ ...editReceita, ingredientes: newIngs });
+                      }}
+                      className="w-20 bg-white border border-[#E8DCC8] rounded-xl p-2.5 text-sm text-[#1A1A2E] focus:outline-none focus:border-[#232A6B] font-mono"
+                    />
+
+                    <select
+                      value={item.unidade}
+                      onChange={e => {
+                        const newIngs = [...editReceita.ingredientes];
+                        newIngs[idx].unidade = e.target.value;
+                        setEditReceita({ ...editReceita, ingredientes: newIngs });
+                      }}
+                      className="w-24 bg-white border border-[#E8DCC8] rounded-xl p-2.5 text-sm text-[#1A1A2E] focus:outline-none focus:border-[#232A6B]"
+                    >
+                      {UNIDADES_MEDIDA.map(u => (
+                        <option key={u.value} value={u.value}>{u.label}</option>
+                      ))}
+                    </select>
+
+                    <button
+                      onClick={() => {
+                        const newIngs = editReceita.ingredientes.filter((_, i) => i !== idx);
+                        setEditReceita({ ...editReceita, ingredientes: newIngs });
+                      }}
+                      className="text-[#8A8066] hover:text-red-500 p-2"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+
+                <button
+                  onClick={() => setEditReceita({
+                    ...editReceita,
+                    ingredientes: [...editReceita.ingredientes, { ingrediente_id: '', buscaIngrediente: '', quantidade: 1, unidade: 'g' }]
+                  })}
+                  className="text-xs text-[#232A6B] hover:underline font-medium pt-1"
+                >
+                  + Adicionar outro ingrediente
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-4 border-t border-[#E8DCC8]">
+              <button
+                onClick={() => setShowEditModal(false)}
+                className="px-4 py-2 rounded-xl text-sm font-medium text-[#5F5A4E] hover:bg-white transition"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleUpdateRecipe}
+                className="px-5 py-2 bg-[#232A6B] hover:bg-[#2E3789] text-[#FAF1E6] rounded-xl text-sm font-medium transition"
+              >
+                Guardar Alterações
               </button>
             </div>
           </div>
